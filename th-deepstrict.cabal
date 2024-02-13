@@ -61,4 +61,4 @@ test-suite test
 
 source-repository head
   type:     git
-  location: https://codeberg.org/teo/wherefrom-compat.git
+  location: https://github.org/tracsis/th-deepstrict.git
