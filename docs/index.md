@@ -1,3 +1,7 @@
+---
+layout: default
+---
+
 # Enforcing strictness properties with `th-deepstrict`
 
 ### Introduction
@@ -88,6 +92,7 @@ So, you can say `Map k x` is deep strict if both `k` and `x` are deep strict.
 
 To use `th-deepstrict`:
 - if you use `cabal-install`, add the following to your `cabal.project`:
+
 ```
 source-repository-package
     type: git
@@ -97,13 +102,14 @@ source-repository-package
     type: git
     location: https://github.com/tracsis/th-deepstrict.git
 ```
-if you use `stack`, add the following to your `extra-deps` in your `stack.yaml`:
+
+- if you use `stack`, add the following to your `extra-deps` in your `stack.yaml`:
+
 ```
 - github: glguy/th-abstraction
   commit: d1037691321198aa4437ce8ae6127f1aabfd5c2b
 - github: tracsis/th-deepstrict
   commit: <commit from main branch>
-
 ```
 
 ### Conclusion

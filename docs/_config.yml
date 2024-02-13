@@ -1,0 +1,4 @@
+title: th-deepstrict
+description: Enforcing deep strictness properties using Template Haskell
+show_downloads: true
+theme: jekyll-theme-cayman
