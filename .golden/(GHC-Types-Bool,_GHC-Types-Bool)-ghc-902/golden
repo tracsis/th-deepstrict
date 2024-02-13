@@ -1,0 +1,5 @@
+NotDeepStrict
+(GHC.Types.Bool, GHC.Types.Bool)
+  con GHC.Tuple.(,)
+    field 0 is lazy
+    field 1 is lazy

@@ -1,0 +1,2 @@
+NotDeepStrict
+GHC.Maybe.Maybe GHC.Types.Bool con GHC.Maybe.Just field 0 is lazy

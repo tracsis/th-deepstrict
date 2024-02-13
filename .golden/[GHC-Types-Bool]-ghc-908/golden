@@ -1,0 +1,5 @@
+NotDeepStrict
+[GHC.Types.Bool]
+  con GHC.Types.:
+    field 0 is lazy
+    field 1 is lazy

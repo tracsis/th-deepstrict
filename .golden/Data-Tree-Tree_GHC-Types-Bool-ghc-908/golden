@@ -1,0 +1,10 @@
+NotDeepStrict
+Data.Tree.Tree GHC.Types.Bool
+  con Data.Tree.Node
+    field Data.Tree.rootLabel is lazy
+    field Data.Tree.subForest is lazy
+    Data.Tree.subForest
+      [Data.Tree.Tree GHC.Types.Bool]
+        con GHC.Types.:
+          field 0 is lazy
+          field 1 is lazy

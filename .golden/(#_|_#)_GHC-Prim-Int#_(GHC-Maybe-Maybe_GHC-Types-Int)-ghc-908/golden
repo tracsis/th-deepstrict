@@ -1,0 +1,6 @@
+NotDeepStrict
+(# | #) GHC.Prim.Int# (GHC.Maybe.Maybe GHC.Types.Int)
+  con GHC.Prim.(# |_ #)
+    field 0 is lazy
+    field 0
+      GHC.Maybe.Maybe GHC.Types.Int con GHC.Maybe.Just field 0 is lazy
