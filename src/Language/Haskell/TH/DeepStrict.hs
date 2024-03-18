@@ -7,7 +7,7 @@
 {-# LANGUAGE TemplateHaskellQuotes      #-}
 {-# LANGUAGE TupleSections              #-}
 
--- | For checking that a datatype is deeply strict, ie, it recursively only has strict fields.
+-- | Check that a datatype is deeply strict, ie, it recursively only has strict fields.
 module Language.Haskell.TH.DeepStrict
   (
   -- * DeepStrict
@@ -20,9 +20,10 @@ module Language.Haskell.TH.DeepStrict
   , assertDeepStrict
   , assertDeepStrictWith
   -- * Context
-  , Context(contextOverride, contextRecursionDepth)
+  , Context(..)
   , Strictness(..)
   , emptyContext
+  , FieldKey
   ) where
 
 import Data.Maybe                    (mapMaybe)
@@ -50,13 +51,15 @@ newtype DeepStrictM a = DeepStrictM { runDeepStrictM :: ReaderT Context Q a }
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadFail, MonadReader Context)
   deriving (TH.Quote, TH.Quasi) via (ReaderT Context Q)
 
+-- | Allow overriding various setting that determine what types we consider deep strict.
 data Context = Context
-  { contextSpine          :: !(S.Set TH.Type) -- ^ the types we are recursively checking. By the inductive hypothesis, we assume they are DeepStrict.
+  { contextSpine          :: !(S.Set TH.Type) -- ^ The types we are recursively checking. By the inductive hypothesis, we assume they are DeepStrict.
   , contextCache          :: !(IORef (M.Map TH.Type DeepStrictWithReason))
   , contextOverride       :: !(M.Map TH.Name (Maybe [Strictness])) -- ^ Maps names of types to whether they can be deep strict and if they can which arguments need to be strict
-  , contextRecursionDepth :: !Int
+  , contextRecursionDepth :: !Int -- ^ A recursion depth to avoid infinite loops.
   }
 
+-- | The default t'Context'.
 emptyContext :: Q Context
 emptyContext = do
   emptyCache <- TH.runIO $ newIORef M.empty
@@ -70,18 +73,20 @@ emptyContext = do
 
 -- | A type is deep strict if and only if for each constructor:
 --
---   - All of its fields are strict
---   - The types of of each field is deep strict
+--   - All of its fields are strict, ie, they have a @!@ if possible.
+--   - The type of of each field is deep strict.
 --
 -- The Monoid instance allows us to gather up reasons why a type fails to be deep strict.
 --
--- *** Examples
+-- === Examples
 --
 -- @()@ is deep strict because its single constructor doesn't have any fields so it is vacuously deep strict.
 --
--- @Int@, @Char@, etc are all deep strict because they are wrappers around unlifted types that cannot be lazy.
+-- 'Int', 'Char', etc are all deep strict because they are wrappers around unlifted types that cannot be lazy.
 --
--- @Maybe Int@ is not deep strict. It has a @Nothing@ constructor, which is fine. But, the @Just@ constructor has a lazy field, which means it's not deep strict.
+-- @Maybe Int@ is not deep strict.
+-- It has a 'Nothing' constructor, which is fine.
+-- But, the 'Just' constructor has a lazy field, which means it's not deep strict.
 data DeepStrict reason =
     DeepStrict
   | NotDeepStrict !reason
@@ -98,15 +103,16 @@ instance Semigroup reason => Semigroup (DeepStrict reason) where
 instance Semigroup reason => Monoid (DeepStrict reason) where
   mempty = DeepStrict
 
+-- | Reasons why a type fails to be deep strict.
 data DeepStrictReason =
     LazyType !TH.Type ![DeepStrictReason]
-  -- ^ The type is lazy
+  -- ^ The type is lazy.
   | LazyConstructor !TH.Name ![DeepStrictReason]
-  -- ^ The type has a lazy constructor
+  -- ^ The type has a lazy constructor.
   | FieldReason !FieldKey ![DeepStrictReason]
-  -- ^ One of the fields of the constructor fails to be deep strict
+  -- ^ One of the fields of the constructor fails to be deep strict.
   | LazyField !FieldKey
-  -- ^ One of the fields of the constructor is lazy, ie, doesn't have a !
+  -- ^ One of the fields of the constructor is lazy, ie, doesn't have a @!@.
   | LazyOther !String
   deriving (Eq, Ord, Show, TH.Lift)
 
@@ -134,8 +140,8 @@ data Levity = Lifted | Unlifted
 
 -- | Whether a type is used strictly by a data type.
 -- We use these to annotate types with deep strictness overrides.
--- Types that have fields labelled as 'Strict' require those types to be deep strict.
--- Types that have fields labelled as 'Lazy' will never be deep strict, but this can be helpful for nicer messages.
+-- Types that have fields labelled as 'Language.Haskell.TH.DeepStrict.Strict' require those types to be deep strict.
+-- Types that have fields labelled as 'Language.Haskell.TH.DeepStrict.Lazy' will never be deep strict, but this can be helpful for nicer messages.
 data Strictness = Strict | Lazy
   deriving (Eq, Ord, Show)
 
