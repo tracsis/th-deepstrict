@@ -86,32 +86,6 @@ This is the case because GHC's array does not guarantee through its types that v
 Even `strict-container`'s `Map` type will come out as not deep strict. To work around issues like this, `th-deepstrict` allows inputting deep strictness overrides.
 So, you can say `Map k x` is deep strict if both `k` and `x` are deep strict.
 
-### Getting `th-deepstrict`
-
-`th-deepstrict` is currently not released on Hackage as it depends on an as yet unreleased version of `th-abstraction`.
-
-To use `th-deepstrict`:
-- if you use `cabal-install`, add the following to your `cabal.project`:
-
-```
-source-repository-package
-    type: git
-    location: https://github.com/glguy/th-abstraction.git
-    tag: d1037691321198aa4437ce8ae6127f1aabfd5c2b
-source-repository-package
-    type: git
-    location: https://github.com/tracsis/th-deepstrict.git
-```
-
-- if you use `stack`, add the following to your `extra-deps` in your `stack.yaml`:
-
-```
-- github: glguy/th-abstraction
-  commit: d1037691321198aa4437ce8ae6127f1aabfd5c2b
-- github: tracsis/th-deepstrict
-  commit: <commit from main branch>
-```
-
 ### Conclusion
 
 `th-deepstrict` is an addition to the Haskell programmers arsenal of tools to reason about and enforce strictness conditions.
