@@ -10,12 +10,13 @@ description:
 
 author:          Teo Camarasu <teofilcamarasu@gmail.com>
 maintainer:      Teo Camarasu <teofilcamarasu@gmail.com>
-version:         0.1.0.0
+version:         0.1.1.0
 copyright:       Tracsis plc
 license:         BSD-3-Clause
 license-file:    LICENSE
 build-type:      Simple
 category:        Development
+bug-reports:     https://github.com/tracsis/th-deepstrict/issues
 extra-doc-files:
   CHANGELOG.md
   README.md
