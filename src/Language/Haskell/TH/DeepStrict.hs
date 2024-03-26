@@ -26,7 +26,8 @@ module Language.Haskell.TH.DeepStrict
   , FieldKey
   ) where
 
-import Data.Maybe                    (mapMaybe)
+import Data.Maybe                    (mapMaybe, fromMaybe)
+import Data.List                     (foldl')
 import Control.Monad                 (when)
 import Control.Monad.IO.Class        (MonadIO)
 import Control.Monad.Reader          (MonadReader (ask, local), ReaderT (..), asks)
@@ -43,6 +44,7 @@ import qualified Data.Set                     as S
 import qualified Data.Map.Strict              as M
 import qualified Language.Haskell.TH          as TH
 import qualified Language.Haskell.TH.Datatype as TH
+import qualified Language.Haskell.TH.Datatype.TyVarBndr as TH
 import qualified Language.Haskell.TH.Ppr      as Ppr
 import qualified Language.Haskell.TH.PprLib   as Ppr
 import qualified Language.Haskell.TH.Syntax   as TH
@@ -296,6 +298,33 @@ isTypeDeepStrict' (TH.UnboxedTupleT arity) args = isNameDeepStrict (TH.unboxedTu
 isTypeDeepStrict' (TH.UnboxedSumT arity) args  = isNameDeepStrict (TH.unboxedSumTypeName arity) args
 isTypeDeepStrict' typ _                   = prettyPanic "Unexpected type" typ
 
+-- | figure out whether a newtype/data family is deep strict
+isDataFamilyDeepStrict
+  :: (p1 -> TH.Name -> [TH.TyVarBndr TH.BndrVis] -> p2 -> p3 -> p4 -> TH.Dec)
+  -> TH.Name
+  -> [TH.Type]
+  -> p1
+  -> Maybe [TH.TyVarBndr ()]
+  -> TH.Type
+  -> p2
+  -> p3
+  -> p4
+  -> DeepStrictM DeepStrictWithReason
+isDataFamilyDeepStrict dConstr typeName args cxt mTyVarBndrs typ kind con deriv =  do
+  let tyVarBndrs = fromMaybe [] mTyVarBndrs
+  let
+    mkRequiredVis (TH.PlainTV x _) = TH.plainTVFlag x TH.BndrReq
+    mkRequiredVis (TH.KindedTV x _ k) = TH.kindedTVFlag x TH.BndrReq k
+  let appliedArgs = foldl' TH.AppT (TH.ConT typeName) args
+  let d = dConstr cxt (TH.mkName $ TH.pprint $ appliedArgs)  (map mkRequiredVis tyVarBndrs) kind con deriv
+  datatypeInfo <- DeepStrictM $ lift $ TH.normalizeDec d
+  -- figure out the mapping from the input to the free variables in the family instance
+  unified <- DeepStrictM . lift $ TH.unifyTypes [appliedArgs, typ]
+  let tyVarNotFound = error "unmatched type variable in a data family definition"
+  -- now our args are those free variables with the mapping
+  let args' = map (fromMaybe tyVarNotFound . flip M.lookup unified . TH.tvName) tyVarBndrs
+  isDatatypeDeepStrict datatypeInfo args'
+
 -- | Is this type constructor applied to these arguments deep strict
 isNameDeepStrict :: HasCallStack => TH.Name -> [TH.Type] -> DeepStrictM DeepStrictWithReason
 isNameDeepStrict typeName args = do
@@ -309,7 +338,7 @@ isNameDeepStrict typeName args = do
         TH.TyConI (TH.TySynD _name tyvarbndrs rhs) -> do
           let (env, args') = prepareDatatypeInfoEnv args (map TH.tvName tyvarbndrs)
           isTypeDeepStrict (TH.applySubstitution env rhs) args'
-        -- th-abstraction doesn't handle type/data families
+        -- handle type/data families
         TH.FamilyI{} -> do
           instances <- DeepStrictM $ lift $ TH.reifyInstances typeName args
           case instances of
@@ -318,7 +347,12 @@ isNameDeepStrict typeName args = do
             (TH.TySynInstD (TH.TySynEqn _ lhs rhs)):_ -> do
               let (env, args') = prepareDatatypeInfoEnv args (TH.freeVariables lhs)
               isTypeDeepStrict (TH.applySubstitution env rhs) args'
-            _ -> error "The majority of data/type families are currently not supported"
+            -- let's construct a dummy datatype decleration
+            (TH.DataInstD cxt mTyVarBndrs typ kind con deriv):_ -> do
+              isDataFamilyDeepStrict TH.DataD typeName args cxt mTyVarBndrs typ kind con deriv
+            (TH.NewtypeInstD cxt mTyVarBndrs typ kind con deriv):_ -> do
+              isDataFamilyDeepStrict TH.NewtypeD typeName args cxt mTyVarBndrs typ kind con deriv
+            _ -> error "Unsupported/ambiguous data/type family"
         _ -> do
           datatypeInfo <- DeepStrictM $ lift $ TH.normalizeInfo info
           isDatatypeDeepStrict datatypeInfo args

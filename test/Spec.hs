@@ -7,6 +7,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE UnboxedSums #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
 module Main where
 
@@ -23,6 +24,16 @@ data Tricky = Tricky !Int (HashMap Int Int)
 
 newtype Identity# :: forall (r :: RuntimeRep). TYPE r -> TYPE r where
   MkIdentity# :: forall (r :: RuntimeRep) (a :: TYPE r). a -> Identity# a
+
+data family Strict x
+data instance Strict (a, b) = StrictPair !a !b
+data instance Strict (Maybe a) = StrictJust !a | StrictNothing
+
+type family Strict' x
+type instance Strict' [x] = StrictList x
+
+data EmbeddedDataFam = EmbeddedDataFam !Int !(Strict (Char, Int))
+data EmbeddedDataFamFail = EmbeddedDataFamFail !Int !(Strict (Char, Maybe Int))
 
 $(pure [])
 
@@ -57,4 +68,11 @@ spec = testGroup "golden tests"
     ]
   , testGroup "regresion tests"
     [ $(testType =<< [t|Tricky|]) ]
+  , testGroup "data families"
+    [ $(testType =<< [t|Strict (Int, Int)|])
+    , $(testType =<< [t|Strict (Maybe Char)|])
+    , $(testType =<< [t|EmbeddedDataFam|])
+    , $(testType =<< [t|EmbeddedDataFamFail|])
+    , $(testType =<< [t|Strict' [Int]|])
+    ]
   ]
