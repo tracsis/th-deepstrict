@@ -1,0 +1,9 @@
+NotDeepStrict
+Main.Strict' [GHC.Types.Int]
+  Main.StrictList [GHC.Types.Int]
+    con Main.SCons
+      field 0
+        [GHC.Types.Int]
+          con GHC.Types.:
+            field 0 is lazy
+            field 1 is lazy

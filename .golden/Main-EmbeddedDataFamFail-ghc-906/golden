@@ -1,0 +1,8 @@
+NotDeepStrict
+Main.EmbeddedDataFamFail
+  con Main.EmbeddedDataFamFail
+    field 1
+      Main.Strict (GHC.Types.Char, GHC.Maybe.Maybe GHC.Types.Int)
+        con Main.StrictPair
+          field 1
+            GHC.Maybe.Maybe GHC.Types.Int con GHC.Maybe.Just field 0 is lazy
