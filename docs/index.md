@@ -11,7 +11,7 @@ It can lead to higher than expected memory usage due to heap objects being retai
 This is known as a "space leak". 
 Like any other performance issue, it can be tricky to track down and fix, especially in large, complex codebases.
 
-At [Tracis](https://tracsis.com) we have written a library, `th-deepstrict`, to help avoid this class of problem by asserting the strictness of a datatype at compile time.
+At [Tracsis](https://tracsis.com) we have written a library, `th-deepstrict`, to help avoid this class of problem by asserting the strictness of a datatype at compile time.
 
 We will give a brief introduction to excessive laziness; survey existing tools; and then present `th-deepstrict`.
 
