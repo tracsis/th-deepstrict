@@ -65,6 +65,7 @@ data Context = Context
   -- All of SmallArray#, SmallMutableArray#, MutableArray#, and Array# are added
   -- and are `Just [ExpectUnlifted]`.
   , contextRecursionDepth :: !Int -- ^ A recursion depth to avoid infinite loops.
+  , contextArgs           :: ![TH.Type]
   }
 
 -- | The default t'Context'.
@@ -77,6 +78,7 @@ emptyContext = do
       , contextCache = emptyCache
       , contextOverride = M.empty
       , contextRecursionDepth = 1000
+      , contextArgs = []
       }
 
 -- | Structures that are present in base that need special treatment (they don't
@@ -88,6 +90,9 @@ baseOverride = M.fromList
   , (''MutableArray#, Just [ExpectUnlifted])
   , (''Array#, Just [ExpectUnlifted])
   ]
+
+modifyArgsWith :: ([TH.Type] -> [TH.Type]) -> DeepStrictM a -> DeepStrictM a
+modifyArgsWith f = local (\ctx -> ctx { contextArgs = f (contextArgs ctx) })
 
 -- | A type is deep strict if and only if for each constructor:
 --
@@ -182,10 +187,11 @@ type FieldKey = Either Int TH.Name
 
 type Env = ML.Map TH.Name TH.Type
 
-prepareDatatypeInfoEnv :: HasCallStack => [TH.Type] -> [TH.Name] -> (Env, [TH.Type])
-prepareDatatypeInfoEnv args argNames = first makeEnv $ splitAt (length argNames) args
-  where
-    makeEnv = ML.fromList . zip argNames
+withEnv :: [TH.Name] -> (Env -> DeepStrictM a) -> DeepStrictM a
+withEnv argNames f = do
+  args <- asks contextArgs
+  let env = ML.fromList $ zip argNames args
+  modifyArgsWith (drop (ML.size env)) (f env)
 
 reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
 reifyLevityType (TH.ConT name) = reifyLevityName name
@@ -212,31 +218,23 @@ classifyKindLevity TH.StarT      = Lifted
 classifyKindLevity _             = Unlifted
 
 
-isDatatypeDeepStrict :: HasCallStack => TH.DatatypeInfo -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isDatatypeDeepStrict dt args = isDatatypeDeepStrict'
+isDatatypeDeepStrict :: HasCallStack => TH.DatatypeInfo -> DeepStrictM DeepStrictWithReason
+isDatatypeDeepStrict dt@(TH.DatatypeInfo {TH.datatypeInstTypes = instTypes}) =
+  withEnv (mapMaybe getVariable instTypes) $ \env ->
+    isDatatypeDeepStrict' dt { TH.datatypeCons = TH.applySubstitution env (TH.datatypeCons dt) }
   where
-  (updatedDt, udpatedArgs) = substituteDatatypeInfoEnv args dt
+  getVariable :: TH.Type -> Maybe TH.Name
+  getVariable (TH.SigT t _k) = getVariable t
+  getVariable (TH.VarT v) = Just v
+  getVariable _ = Nothing
 
-  substituteDatatypeInfoEnv :: HasCallStack => [TH.Type] -> TH.DatatypeInfo -> (TH.DatatypeInfo, [TH.Type])
-  substituteDatatypeInfoEnv typeArgs datatypeInfo =
-    (datatypeInfo { TH.datatypeCons = TH.applySubstitution env (TH.datatypeCons datatypeInfo)
-                  }
-    , typeArgs')
-    where
-      getVariable :: TH.Type -> Maybe TH.Name
-      getVariable (TH.SigT t _k) = getVariable t
-      getVariable (TH.VarT v) = Just v
-      getVariable _ = Nothing
-      freeVars = mapMaybe getVariable $ TH.datatypeInstTypes datatypeInfo
-      (env, typeArgs') = prepareDatatypeInfoEnv typeArgs freeVars
-
-  isDatatypeDeepStrict' :: HasCallStack => DeepStrictM DeepStrictWithReason
-  isDatatypeDeepStrict' = do
-    consDeepStrict <- traverse (\c -> isConDeepStrict c (TH.datatypeVariant updatedDt) udpatedArgs) $ TH.datatypeCons updatedDt
+  isDatatypeDeepStrict' :: HasCallStack => TH.DatatypeInfo -> DeepStrictM DeepStrictWithReason
+  isDatatypeDeepStrict' updatedDt = do
+    consDeepStrict <- traverse (\c -> isConDeepStrict c (TH.datatypeVariant updatedDt)) $ TH.datatypeCons updatedDt
     pure $ mconcat consDeepStrict
 
-isConDeepStrict :: HasCallStack => TH.ConstructorInfo -> TH.DatatypeVariant -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isConDeepStrict (TH.ConstructorInfo { TH.constructorName = conName, TH.constructorFields = fieldTypes, TH.constructorVariant = conVar }) variant args = do
+isConDeepStrict :: HasCallStack => TH.ConstructorInfo -> TH.DatatypeVariant -> DeepStrictM DeepStrictWithReason
+isConDeepStrict (TH.ConstructorInfo { TH.constructorName = conName, TH.constructorFields = fieldTypes, TH.constructorVariant = conVar }) variant = do
   fieldBangs <-
     if isNewtype variant
     then pure $ repeat WeakStrict -- newtypes are strict
@@ -263,7 +261,7 @@ isConDeepStrict (TH.ConstructorInfo { TH.constructorName = conName, TH.construct
 
   isFieldDeepStrict :: HasCallStack => FieldKey -> WeakStrictness -> TH.Type -> DeepStrictM DeepStrictWithReason
   isFieldDeepStrict fieldName fieldWeakStrictness fieldType = do
-    fieldTypeRecStrict <- isTypeDeepStrict fieldType args
+    fieldTypeRecStrict <- isTypeDeepStrict fieldType
     fieldLevity <- reifyLevityType fieldType
     case (fieldWeakStrictness, fieldTypeRecStrict, fieldLevity) of
       (WeakStrict, DeepStrict, _) -> pure DeepStrict
@@ -284,8 +282,8 @@ putCachedDeepStrict typ val = do
   cacheRef <- asks contextCache
   TH.qRunIO . modifyIORef' cacheRef $ M.insert typ (const [LazyOther $ Ppr.pprint typ <> " is lazy see above"] <$> val)
 
-isTypeDeepStrict :: HasCallStack => TH.Type -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isTypeDeepStrict typ args = do
+isTypeDeepStrict :: HasCallStack => TH.Type -> DeepStrictM DeepStrictWithReason
+isTypeDeepStrict typ = do
   ctxt <- ask
   cachedVal <- getCachedDeepStrict typ
   when (contextRecursionDepth ctxt <= 0) . fail $ "Recursion depth reached. Try adding an override for this type: " <> take 1000 (show typ)
@@ -295,28 +293,27 @@ isTypeDeepStrict typ args = do
     _ ->
       local (\_ctxt ->
         ctxt {contextSpine = S.insert typ (contextSpine ctxt), contextRecursionDepth = contextRecursionDepth ctxt - 1}) $ do
-          ret <- inType <$> isTypeDeepStrict' typ args
+          ret <- inType <$> isTypeDeepStrict' typ
           putCachedDeepStrict typ ret
           pure ret
   where
     inType = giveReasonContext (LazyType typ)
 
-isTypeDeepStrict' :: HasCallStack => TH.Type -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isTypeDeepStrict' (TH.ConT typeName) args = isNameDeepStrict typeName args
-isTypeDeepStrict' (TH.AppT func arg) args = isTypeDeepStrict' func (arg:args)
-isTypeDeepStrict' (TH.TupleT 0) _         = pure DeepStrict -- () is DeepStrict
-isTypeDeepStrict' (TH.TupleT n) args      = isNameDeepStrict (TH.tupleTypeName n) args
-isTypeDeepStrict' (TH.ArrowT{}) _         = pure $ NotDeepStrict [LazyOther "Functions are lazy"]
-isTypeDeepStrict' (TH.ListT{}) args       = isNameDeepStrict ''[] args
-isTypeDeepStrict' (TH.UnboxedTupleT arity) args = isNameDeepStrict (TH.unboxedTupleTypeName arity) args
-isTypeDeepStrict' (TH.UnboxedSumT arity) args  = isNameDeepStrict (TH.unboxedSumTypeName arity) args
-isTypeDeepStrict' typ _                   = prettyPanic "Unexpected type" typ
+isTypeDeepStrict' :: HasCallStack => TH.Type -> DeepStrictM DeepStrictWithReason
+isTypeDeepStrict' (TH.ConT typeName) = isNameDeepStrict typeName
+isTypeDeepStrict' (TH.AppT func arg) = modifyArgsWith (arg:) $ isTypeDeepStrict' func
+isTypeDeepStrict' (TH.TupleT 0)      = pure DeepStrict -- () is DeepStrict
+isTypeDeepStrict' (TH.TupleT n)      = isNameDeepStrict (TH.tupleTypeName n)
+isTypeDeepStrict' (TH.ArrowT{})      = pure $ NotDeepStrict [LazyOther "Functions are lazy"]
+isTypeDeepStrict' (TH.ListT{})       = isNameDeepStrict ''[]
+isTypeDeepStrict' (TH.UnboxedTupleT arity) = isNameDeepStrict (TH.unboxedTupleTypeName arity)
+isTypeDeepStrict' (TH.UnboxedSumT arity) = isNameDeepStrict (TH.unboxedSumTypeName arity)
+isTypeDeepStrict' typ                    = prettyPanic "Unexpected type" typ
 
 -- | figure out whether a newtype/data family is deep strict
 isDataFamilyDeepStrict
   :: (p1 -> TH.Name -> [TH.TyVarBndr TH.BndrVis] -> p2 -> p3 -> p4 -> TH.Dec)
   -> TH.Name
-  -> [TH.Type]
   -> p1
   -> Maybe [TH.TyVarBndr ()]
   -> TH.Type
@@ -324,24 +321,25 @@ isDataFamilyDeepStrict
   -> p3
   -> p4
   -> DeepStrictM DeepStrictWithReason
-isDataFamilyDeepStrict dConstr typeName args cxt mTyVarBndrs typ kind con deriv =  do
+isDataFamilyDeepStrict dConstr typeName cxt mTyVarBndrs typ kind con deriv =  do
   let tyVarBndrs = fromMaybe [] mTyVarBndrs
   let
     mkRequiredVis (TH.PlainTV x _) = TH.plainTVFlag x TH.BndrReq
     mkRequiredVis (TH.KindedTV x _ k) = TH.kindedTVFlag x TH.BndrReq k
+  args <- asks contextArgs
   let appliedArgs = foldl' TH.AppT (TH.ConT typeName) args
-  let d = dConstr cxt (TH.mkName $ TH.pprint $ appliedArgs)  (map mkRequiredVis tyVarBndrs) kind con deriv
+  let d = dConstr cxt (TH.mkName $ TH.pprint appliedArgs)  (map mkRequiredVis tyVarBndrs) kind con deriv
   datatypeInfo <- DeepStrictM $ lift $ TH.normalizeDec d
   -- figure out the mapping from the input to the free variables in the family instance
   unified <- DeepStrictM . lift $ TH.unifyTypes [appliedArgs, typ]
   let tyVarNotFound = error "unmatched type variable in a data family definition"
   -- now our args are those free variables with the mapping
   let args' = map (fromMaybe tyVarNotFound . flip M.lookup unified . TH.tvName) tyVarBndrs
-  isDatatypeDeepStrict datatypeInfo args'
+  modifyArgsWith (const args') $ isDatatypeDeepStrict datatypeInfo
 
 -- | Is this type constructor applied to these arguments deep strict
-isNameDeepStrict :: HasCallStack => TH.Name -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isNameDeepStrict typeName args = do
+isNameDeepStrict :: HasCallStack => TH.Name -> DeepStrictM DeepStrictWithReason
+isNameDeepStrict typeName = do
   ctxt <- ask
   case M.lookup typeName $ contextOverride ctxt of
     Nothing -> do
@@ -350,36 +348,36 @@ isNameDeepStrict typeName args = do
         -- th-abstraction can't handle type synonyms.
         -- let's treat a type synonym as just the RHS
         TH.TyConI (TH.TySynD _name tyvarbndrs rhs) -> do
-          let (env, args') = prepareDatatypeInfoEnv args (map TH.tvName tyvarbndrs)
-          isTypeDeepStrict (TH.applySubstitution env rhs) args'
+          withEnv (map TH.tvName tyvarbndrs) $ \env ->
+            isTypeDeepStrict (TH.applySubstitution env rhs)
         -- handle type/data families
         TH.FamilyI{} -> do
-          instances <- DeepStrictM $ lift $ TH.reifyInstances typeName args
+          instances <- DeepStrictM $ lift $ TH.reifyInstances typeName (contextArgs ctxt)
           case instances of
             -- a type synonym instance is handled like a type synonym:
             -- just treat it as the RHS.
             (TH.TySynInstD (TH.TySynEqn _ lhs rhs)):_ -> do
-              let (env, args') = prepareDatatypeInfoEnv args (TH.freeVariables lhs)
-              isTypeDeepStrict (TH.applySubstitution env rhs) args'
+              withEnv (TH.freeVariables lhs) $ \env ->
+                isTypeDeepStrict (TH.applySubstitution env rhs)
             -- let's construct a dummy datatype decleration
             (TH.DataInstD cxt mTyVarBndrs typ kind con deriv):_ -> do
-              isDataFamilyDeepStrict TH.DataD typeName args cxt mTyVarBndrs typ kind con deriv
+              isDataFamilyDeepStrict TH.DataD typeName cxt mTyVarBndrs typ kind con deriv
             (TH.NewtypeInstD cxt mTyVarBndrs typ kind con deriv):_ -> do
-              isDataFamilyDeepStrict TH.NewtypeD typeName args cxt mTyVarBndrs typ kind con deriv
+              isDataFamilyDeepStrict TH.NewtypeD typeName cxt mTyVarBndrs typ kind con deriv
             _ -> error "Unsupported/ambiguous data/type family"
         _ -> do
           datatypeInfo <- DeepStrictM $ lift $ TH.normalizeInfo info
-          isDatatypeDeepStrict datatypeInfo args
+          isDatatypeDeepStrict datatypeInfo
     Just Nothing -> pure $ NotDeepStrict [LazyOther "This type is marked as lazy"]
     Just (Just strictnessReqs) ->
-      fmap mconcat . for (zip strictnessReqs args) $ \case
+      fmap mconcat . for (zip strictnessReqs (contextArgs ctxt)) $ \case
         (ExpectAnything, _)     -> pure DeepStrict
-        (ExpectStrict, typ) -> isTypeDeepStrict typ []
+        (ExpectStrict, typ) -> modifyArgsWith (const []) $ isTypeDeepStrict typ
         (ExpectUnlifted, typ) -> do
           levity <- reifyLevityType typ
           case levity of
             Lifted -> pure $ NotDeepStrict [LazyNotUnlifted (Left typ) []]
-            Unlifted -> isTypeDeepStrict typ []
+            Unlifted -> modifyArgsWith (const []) $ isTypeDeepStrict typ
 
 -- | Determine if a type is deep strict
 -- Invariant: The type doesn't contain any free variables, eg, @Maybe a@ will fail.
@@ -391,7 +389,7 @@ isDeepStrict typ = do
 isDeepStrictWith :: Context -> TH.Type -> Q DeepStrictWithReason
 isDeepStrictWith context typ = do
   typRes <- TH.resolveTypeSynonyms typ
-  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes []) context { contextOverride = contextOverride context <> baseOverride }
+  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes) context { contextOverride = contextOverride context <> baseOverride }
 
 
 -- | Assert that a type is deep strict.
