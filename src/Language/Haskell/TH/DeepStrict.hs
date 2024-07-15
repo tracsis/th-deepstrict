@@ -194,24 +194,6 @@ prepareDatatypeInfoEnv args argNames = first makeEnv $ splitAt (length argNames)
   where
     makeEnv = ML.fromList . zip argNames
 
-substituteDatatypeInfoEnv :: HasCallStack => [TH.Type] -> TH.DatatypeInfo -> (TH.DatatypeInfo, [TH.Type])
-substituteDatatypeInfoEnv typeArgs datatypeInfo =
-  (datatypeInfo { TH.datatypeCons = TH.applySubstitution env (TH.datatypeCons datatypeInfo)
-                }
-  , typeArgs')
-  where
-    getVariable :: TH.Type -> Maybe TH.Name
-    getVariable (TH.SigT t _k) = getVariable t
-    getVariable (TH.VarT v) = Just v
-    getVariable _ = Nothing
-    freeVars = mapMaybe getVariable $ TH.datatypeInstTypes datatypeInfo
-    (env, typeArgs') = prepareDatatypeInfoEnv typeArgs freeVars
-
-decodeDecidedStrictness :: TH.DecidedStrictness -> WeakStrictness
-decodeDecidedStrictness TH.DecidedStrict = WeakStrict
-decodeDecidedStrictness TH.DecidedUnpack = WeakStrict
-decodeDecidedStrictness TH.DecidedLazy   = WeakLazy
-
 reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
 reifyLevityType (TH.ConT name) = reifyLevityName name
 reifyLevityType (TH.AppT x _)  = reifyLevityType x
@@ -238,47 +220,64 @@ classifyKindLevity _             = Unlifted
 
 
 isDatatypeDeepStrict :: HasCallStack => TH.DatatypeInfo -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isDatatypeDeepStrict dt args = isDatatypeDeepStrict' dt' args'
+isDatatypeDeepStrict dt args = isDatatypeDeepStrict'
   where
-    (dt', args') = substituteDatatypeInfoEnv args dt
+  (updatedDt, udpatedArgs) = substituteDatatypeInfoEnv args dt
 
-isDatatypeDeepStrict' :: HasCallStack => TH.DatatypeInfo -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isDatatypeDeepStrict' datatypeInfo args = do
-  consDeepStrict <- traverse (\c -> isConDeepStrict c (TH.datatypeVariant datatypeInfo) args) $ TH.datatypeCons datatypeInfo
-  pure $ mconcat consDeepStrict
+  substituteDatatypeInfoEnv :: HasCallStack => [TH.Type] -> TH.DatatypeInfo -> (TH.DatatypeInfo, [TH.Type])
+  substituteDatatypeInfoEnv typeArgs datatypeInfo =
+    (datatypeInfo { TH.datatypeCons = TH.applySubstitution env (TH.datatypeCons datatypeInfo)
+                  }
+    , typeArgs')
+    where
+      getVariable :: TH.Type -> Maybe TH.Name
+      getVariable (TH.SigT t _k) = getVariable t
+      getVariable (TH.VarT v) = Just v
+      getVariable _ = Nothing
+      freeVars = mapMaybe getVariable $ TH.datatypeInstTypes datatypeInfo
+      (env, typeArgs') = prepareDatatypeInfoEnv typeArgs freeVars
 
--- | Figure out the field names for a constructor.
--- We have names for records, we use indices for everything else.
-extractFieldNames :: TH.ConstructorVariant -> [FieldKey]
-extractFieldNames (TH.RecordConstructor fieldNames) = map Right fieldNames
-extractFieldNames _                                 = map Left [0..]
+  isDatatypeDeepStrict' :: HasCallStack => DeepStrictM DeepStrictWithReason
+  isDatatypeDeepStrict' = do
+    consDeepStrict <- traverse (\c -> isConDeepStrict c (TH.datatypeVariant updatedDt) udpatedArgs) $ TH.datatypeCons updatedDt
+    pure $ mconcat consDeepStrict
 
 isConDeepStrict :: HasCallStack => TH.ConstructorInfo -> TH.DatatypeVariant -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isConDeepStrict conInfo@(TH.ConstructorInfo { TH.constructorName = conName, TH.constructorFields = fieldTypes }) variant args = do
+isConDeepStrict (TH.ConstructorInfo { TH.constructorName = conName, TH.constructorFields = fieldTypes, TH.constructorVariant = conVar }) variant args = do
   fieldBangs <-
     if isNewtype variant
     then pure $ repeat WeakStrict -- newtypes are strict
     else map decodeDecidedStrictness <$> TH.qReifyConStrictness conName
-  let fieldNames = extractFieldNames $ TH.constructorVariant conInfo
-  let conFields = zipWith3 FieldInfo fieldNames fieldBangs fieldTypes
-  fieldDeepStrict <- traverse (`isFieldDeepStrict` args) conFields
+  fieldDeepStrict <- sequence $ zipWith3 isFieldDeepStrict fieldNames fieldBangs fieldTypes
   pure $ giveReasonContext (LazyConstructor conName) $ mconcat fieldDeepStrict
-
-isNewtype :: TH.DatatypeVariant -> Bool
-isNewtype TH.Newtype         = True
-isNewtype TH.NewtypeInstance = True
-isNewtype _                  = False
-
-isFieldDeepStrict :: HasCallStack => FieldInfo -> [TH.Type] -> DeepStrictM DeepStrictWithReason
-isFieldDeepStrict (FieldInfo fieldName fieldWeakStrictness fieldType) args = do
-  fieldTypeRecStrict <- isTypeDeepStrict fieldType args
-  fieldLevity <- reifyLevityType fieldType
-  case (fieldWeakStrictness, fieldTypeRecStrict, fieldLevity) of
-    (WeakStrict, DeepStrict, _) -> pure DeepStrict
-    (WeakLazy, DeepStrict, Unlifted) -> pure DeepStrict
-    (WeakLazy, strictness, Lifted) -> pure $ NotDeepStrict [LazyField fieldName] <> inField strictness
-    (_, strictness, _) -> pure $ inField strictness
   where
+  decodeDecidedStrictness :: TH.DecidedStrictness -> WeakStrictness
+  decodeDecidedStrictness TH.DecidedStrict = WeakStrict
+  decodeDecidedStrictness TH.DecidedUnpack = WeakStrict
+  decodeDecidedStrictness TH.DecidedLazy   = WeakLazy
+
+  -- | Figure out the field names for a constructor.
+  -- We have names for records, we use indices for everything else.
+  fieldNames :: [FieldKey]
+  fieldNames = case conVar of
+    (TH.RecordConstructor theFieldNames) -> map Right theFieldNames
+    _ -> map Left [0..]
+
+  isNewtype :: TH.DatatypeVariant -> Bool
+  isNewtype TH.Newtype         = True
+  isNewtype TH.NewtypeInstance = True
+  isNewtype _                  = False
+
+  isFieldDeepStrict :: HasCallStack => FieldKey -> WeakStrictness -> TH.Type -> DeepStrictM DeepStrictWithReason
+  isFieldDeepStrict fieldName fieldWeakStrictness fieldType = do
+    fieldTypeRecStrict <- isTypeDeepStrict fieldType args
+    fieldLevity <- reifyLevityType fieldType
+    case (fieldWeakStrictness, fieldTypeRecStrict, fieldLevity) of
+      (WeakStrict, DeepStrict, _) -> pure DeepStrict
+      (WeakLazy, DeepStrict, Unlifted) -> pure DeepStrict
+      (WeakLazy, strictness, Lifted) -> pure $ NotDeepStrict [LazyField fieldName] <> inField strictness
+      (_, strictness, _) -> pure $ inField strictness
+    where
     inField = giveReasonContext (FieldReason fieldName)
 
 getCachedDeepStrict :: HasCallStack => TH.Type -> DeepStrictM (Maybe DeepStrictWithReason)
