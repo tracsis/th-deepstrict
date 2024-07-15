@@ -291,18 +291,19 @@ isTypeDeepStrict typ = do
           putCachedDeepStrict typ ret
           pure ret
   where
-    inType = giveReasonContext (LazyType typ)
+  inType = giveReasonContext (LazyType typ)
 
-isTypeDeepStrict' :: HasCallStack => TH.Type -> DeepStrictM DeepStrictWithReason
-isTypeDeepStrict' (TH.ConT typeName) = isNameDeepStrict typeName
-isTypeDeepStrict' (TH.AppT func arg) = modifyArgsWith (arg:) $ isTypeDeepStrict' func
-isTypeDeepStrict' (TH.TupleT 0)      = pure DeepStrict -- () is DeepStrict
-isTypeDeepStrict' (TH.TupleT n)      = isNameDeepStrict (TH.tupleTypeName n)
-isTypeDeepStrict' (TH.ArrowT{})      = pure $ NotDeepStrict [LazyOther "Functions are lazy"]
-isTypeDeepStrict' (TH.ListT{})       = isNameDeepStrict ''[]
-isTypeDeepStrict' (TH.UnboxedTupleT arity) = isNameDeepStrict (TH.unboxedTupleTypeName arity)
-isTypeDeepStrict' (TH.UnboxedSumT arity) = isNameDeepStrict (TH.unboxedSumTypeName arity)
-isTypeDeepStrict' typ                    = prettyPanic "Unexpected type" typ
+  isTypeDeepStrict' :: HasCallStack => TH.Type -> DeepStrictM DeepStrictWithReason
+  isTypeDeepStrict' = \case
+    (TH.ConT typeName) -> isNameDeepStrict typeName
+    (TH.AppT func arg) -> modifyArgsWith (arg:) $ isTypeDeepStrict' func
+    (TH.TupleT 0)      -> pure DeepStrict -- () is DeepStrict
+    (TH.TupleT n)      -> isNameDeepStrict (TH.tupleTypeName n)
+    (TH.ArrowT{})      -> pure $ NotDeepStrict [LazyOther "Functions are lazy"]
+    (TH.ListT{})       -> isNameDeepStrict ''[]
+    (TH.UnboxedTupleT arity) -> isNameDeepStrict (TH.unboxedTupleTypeName arity)
+    (TH.UnboxedSumT arity) -> isNameDeepStrict (TH.unboxedSumTypeName arity)
+    typ'                    -> prettyPanic "Unexpected type" typ'
 
 -- | figure out whether a newtype/data family is deep strict
 isDataFamilyDeepStrict
