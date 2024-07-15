@@ -205,65 +205,65 @@ isDatatypeDeepStrict dt@(TH.DatatypeInfo {TH.datatypeInstTypes = instTypes}) =
 
   isDatatypeDeepStrict' :: HasCallStack => TH.DatatypeInfo -> DeepStrictM DeepStrictWithReason
   isDatatypeDeepStrict' updatedDt = do
-    consDeepStrict <- traverse (\c -> isConDeepStrict c (TH.datatypeVariant updatedDt)) $ TH.datatypeCons updatedDt
+    consDeepStrict <- traverse isConDeepStrict (TH.datatypeCons updatedDt)
     pure $ mconcat consDeepStrict
-
-isConDeepStrict :: HasCallStack => TH.ConstructorInfo -> TH.DatatypeVariant -> DeepStrictM DeepStrictWithReason
-isConDeepStrict (TH.ConstructorInfo { TH.constructorName = conName, TH.constructorFields = fieldTypes, TH.constructorVariant = conVar }) variant = do
-  fieldBangs <-
-    if isNewtype variant
-    then pure $ repeat WeakStrict -- newtypes are strict
-    else map decodeDecidedStrictness <$> TH.qReifyConStrictness conName
-  fieldDeepStrict <- sequence $ zipWith3 isFieldDeepStrict fieldNames fieldBangs fieldTypes
-  pure $ giveReasonContext (LazyConstructor conName) $ mconcat fieldDeepStrict
-  where
-  decodeDecidedStrictness :: TH.DecidedStrictness -> WeakStrictness
-  decodeDecidedStrictness TH.DecidedStrict = WeakStrict
-  decodeDecidedStrictness TH.DecidedUnpack = WeakStrict
-  decodeDecidedStrictness TH.DecidedLazy   = WeakLazy
-
-  -- | Figure out the field names for a constructor.
-  -- We have names for records, we use indices for everything else.
-  fieldNames :: [FieldKey]
-  fieldNames = case conVar of
-    (TH.RecordConstructor theFieldNames) -> map Right theFieldNames
-    _ -> map Left [0..]
-
-  isNewtype :: TH.DatatypeVariant -> Bool
-  isNewtype TH.Newtype         = True
-  isNewtype TH.NewtypeInstance = True
-  isNewtype _                  = False
-
-  isFieldDeepStrict :: HasCallStack => FieldKey -> WeakStrictness -> TH.Type -> DeepStrictM DeepStrictWithReason
-  isFieldDeepStrict fieldName fieldWeakStrictness fieldType = do
-    fieldTypeRecStrict <- isTypeDeepStrict fieldType
-    fieldLevity <- reifyLevityType fieldType
-    case (fieldWeakStrictness, fieldTypeRecStrict, fieldLevity) of
-      (WeakStrict, DeepStrict, _) -> pure DeepStrict
-      (WeakLazy, DeepStrict, Unlifted) -> pure DeepStrict
-      (WeakLazy, strictness, Lifted) -> pure $ NotDeepStrict [LazyField fieldName] <> inField strictness
-      (_, strictness, _) -> pure $ inField strictness
     where
-    inField = giveReasonContext (FieldReason fieldName)
+    isNewtype = case TH.datatypeVariant updatedDt of
+      TH.Newtype -> True
+      TH.NewtypeInstance -> True
+      _ -> False
 
-  reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
-  reifyLevityType = \case
-    (TH.ConT name) -> classifyKindLevity <$> TH.qReifyType name
-    (TH.AppT x _)  -> reifyLevityType x
-    (TH.ListT{})   -> pure Lifted
-    (TH.TupleT{})  -> pure Lifted
-    (TH.ArrowT{})  -> pure Lifted
-    (TH.UnboxedTupleT{}) -> pure Unlifted
-    (TH.UnboxedSumT{}) -> pure Unlifted
-    typ -> prettyPanic "unexpected type" typ
-    where
-    -- | Figure out the levity of a type from its kind.
-    --   If it has type arguments the kind will have arrows, we want to know the final return type.
-    --   Eg, for (x -> (y -> z)), we care about z
-    classifyKindLevity :: TH.Kind -> Levity
-    classifyKindLevity (TH.AppT _ x) = classifyKindLevity x
-    classifyKindLevity TH.StarT      = Lifted
-    classifyKindLevity _             = Unlifted
+    isConDeepStrict :: HasCallStack => TH.ConstructorInfo -> DeepStrictM DeepStrictWithReason
+    isConDeepStrict (TH.ConstructorInfo { TH.constructorName = conName, TH.constructorFields = fieldTypes, TH.constructorVariant = conVar }) = do
+      fieldBangs <-
+        if isNewtype
+        then pure $ repeat WeakStrict -- newtypes are strict
+        else map decodeDecidedStrictness <$> TH.qReifyConStrictness conName
+      fieldDeepStrict <- sequence $ zipWith3 isFieldDeepStrict fieldNames fieldBangs fieldTypes
+      pure $ giveReasonContext (LazyConstructor conName) $ mconcat fieldDeepStrict
+      where
+      decodeDecidedStrictness :: TH.DecidedStrictness -> WeakStrictness
+      decodeDecidedStrictness TH.DecidedStrict = WeakStrict
+      decodeDecidedStrictness TH.DecidedUnpack = WeakStrict
+      decodeDecidedStrictness TH.DecidedLazy   = WeakLazy
+
+      -- | Figure out the field names for a constructor.
+      -- We have names for records, we use indices for everything else.
+      fieldNames :: [FieldKey]
+      fieldNames = case conVar of
+        (TH.RecordConstructor theFieldNames) -> map Right theFieldNames
+        _ -> map Left [0..]
+
+      isFieldDeepStrict :: HasCallStack => FieldKey -> WeakStrictness -> TH.Type -> DeepStrictM DeepStrictWithReason
+      isFieldDeepStrict fieldName fieldWeakStrictness fieldType = do
+        fieldTypeRecStrict <- isTypeDeepStrict fieldType
+        fieldLevity <- reifyLevityType fieldType
+        case (fieldWeakStrictness, fieldTypeRecStrict, fieldLevity) of
+          (WeakStrict, DeepStrict, _) -> pure DeepStrict
+          (WeakLazy, DeepStrict, Unlifted) -> pure DeepStrict
+          (WeakLazy, strictness, Lifted) -> pure $ NotDeepStrict [LazyField fieldName] <> inField strictness
+          (_, strictness, _) -> pure $ inField strictness
+        where
+        inField = giveReasonContext (FieldReason fieldName)
+
+      reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
+      reifyLevityType = \case
+        (TH.ConT name) -> classifyKindLevity <$> TH.qReifyType name
+        (TH.AppT x _)  -> reifyLevityType x
+        (TH.ListT{})   -> pure Lifted
+        (TH.TupleT{})  -> pure Lifted
+        (TH.ArrowT{})  -> pure Lifted
+        (TH.UnboxedTupleT{}) -> pure Unlifted
+        (TH.UnboxedSumT{}) -> pure Unlifted
+        typ -> prettyPanic "unexpected type" typ
+        where
+        -- | Figure out the levity of a type from its kind.
+        --   If it has type arguments the kind will have arrows, we want to know the final return type.
+        --   Eg, for (x -> (y -> z)), we care about z
+        classifyKindLevity :: TH.Kind -> Levity
+        classifyKindLevity (TH.AppT _ x) = classifyKindLevity x
+        classifyKindLevity TH.StarT      = Lifted
+        classifyKindLevity _             = Unlifted
 
 getCachedDeepStrict :: HasCallStack => TH.Type -> DeepStrictM (Maybe DeepStrictWithReason)
 getCachedDeepStrict typ = do
