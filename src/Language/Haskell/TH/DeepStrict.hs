@@ -192,30 +192,6 @@ withEnv argNames f = do
   let env = ML.fromList $ zip argNames args
   modifyArgsWith (drop (ML.size env)) (f env)
 
-reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
-reifyLevityType (TH.ConT name) = reifyLevityName name
-reifyLevityType (TH.AppT x _)  = reifyLevityType x
-reifyLevityType (TH.ListT{})   = pure Lifted
-reifyLevityType (TH.TupleT{})  = pure Lifted
-reifyLevityType (TH.ArrowT{})  = pure Lifted
-reifyLevityType (TH.UnboxedTupleT{})  = pure Unlifted
-reifyLevityType (TH.UnboxedSumT{})  = pure Unlifted
-reifyLevityType typ            = prettyPanic "unexpected type" typ
-
--- | precondtion: name is a type
-reifyLevityName :: HasCallStack => TH.Name -> DeepStrictM Levity
-reifyLevityName name = do
-  kind <- TH.qReifyType name
-  pure $ classifyKindLevity kind
-
--- | Figure out the levity of a type from its kind.
---   If it has type arguments the kind will have arrows, we want to know the final return type.
---   Eg, for (x -> (y -> z)), we care about z
-classifyKindLevity :: TH.Kind -> Levity
-classifyKindLevity (TH.AppT _ x) = classifyKindLevity x
-classifyKindLevity TH.StarT      = Lifted
-classifyKindLevity _             = Unlifted
-
 
 isDatatypeDeepStrict :: HasCallStack => TH.DatatypeInfo -> DeepStrictM DeepStrictWithReason
 isDatatypeDeepStrict dt@(TH.DatatypeInfo {TH.datatypeInstTypes = instTypes}) =
@@ -269,6 +245,25 @@ isConDeepStrict (TH.ConstructorInfo { TH.constructorName = conName, TH.construct
       (_, strictness, _) -> pure $ inField strictness
     where
     inField = giveReasonContext (FieldReason fieldName)
+
+  reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
+  reifyLevityType = \case
+    (TH.ConT name) -> classifyKindLevity <$> TH.qReifyType name
+    (TH.AppT x _)  -> reifyLevityType x
+    (TH.ListT{})   -> pure Lifted
+    (TH.TupleT{})  -> pure Lifted
+    (TH.ArrowT{})  -> pure Lifted
+    (TH.UnboxedTupleT{}) -> pure Unlifted
+    (TH.UnboxedSumT{}) -> pure Unlifted
+    typ -> prettyPanic "unexpected type" typ
+    where
+    -- | Figure out the levity of a type from its kind.
+    --   If it has type arguments the kind will have arrows, we want to know the final return type.
+    --   Eg, for (x -> (y -> z)), we care about z
+    classifyKindLevity :: TH.Kind -> Levity
+    classifyKindLevity (TH.AppT _ x) = classifyKindLevity x
+    classifyKindLevity TH.StarT      = Lifted
+    classifyKindLevity _             = Unlifted
 
 getCachedDeepStrict :: HasCallStack => TH.Type -> DeepStrictM (Maybe DeepStrictWithReason)
 getCachedDeepStrict typ = do
