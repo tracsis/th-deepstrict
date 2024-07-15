@@ -180,13 +180,6 @@ data HasBang = HasBang | NoBang
 
 type FieldKey = Either Int TH.Name
 
-data FieldInfo =
-  FieldInfo
-  { fieldInfoName :: FieldKey -- ^ either the index of the field or the name
-  , fieldInfoBang :: WeakStrictness
-  , fieldInfoType :: TH.Type -- ^ May contain variables bound by datatype args
-  } deriving (Eq, Ord, Show)
-
 type Env = ML.Map TH.Name TH.Type
 
 prepareDatatypeInfoEnv :: HasCallStack => [TH.Type] -> [TH.Name] -> (Env, [TH.Type])
