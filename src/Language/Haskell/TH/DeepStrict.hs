@@ -32,7 +32,6 @@ import Control.Monad                 (when)
 import Control.Monad.IO.Class        (MonadIO)
 import Control.Monad.Reader          (MonadReader (ask, local), ReaderT (..), asks)
 import Control.Monad.Trans           (lift)
-import Data.Bifunctor                (first)
 import Data.IORef                    (IORef, modifyIORef', newIORef, readIORef)
 import Data.Traversable              (for)
 import GHC.Stack                     (HasCallStack)
@@ -280,7 +279,7 @@ getCachedDeepStrict typ = do
 putCachedDeepStrict :: HasCallStack => TH.Type -> DeepStrictWithReason  -> DeepStrictM ()
 putCachedDeepStrict typ val = do
   cacheRef <- asks contextCache
-  TH.qRunIO . modifyIORef' cacheRef $ M.insert typ (const [LazyOther $ Ppr.pprint typ <> " is lazy see above"] <$> val)
+  TH.qRunIO . modifyIORef' cacheRef $ M.insert typ ([LazyOther $ Ppr.pprint typ <> " is lazy see above"] <$ val)
 
 isTypeDeepStrict :: HasCallStack => TH.Type -> DeepStrictM DeepStrictWithReason
 isTypeDeepStrict typ = do
@@ -291,7 +290,7 @@ isTypeDeepStrict typ = do
     (Just val, _) -> pure val
     (_, True) -> pure DeepStrict -- by inductive hypothesis
     _ ->
-      local (\_ctxt ->
+      local (const
         ctxt {contextSpine = S.insert typ (contextSpine ctxt), contextRecursionDepth = contextRecursionDepth ctxt - 1}) $ do
           ret <- inType <$> isTypeDeepStrict' typ
           putCachedDeepStrict typ ret
