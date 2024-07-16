@@ -124,6 +124,8 @@ data DeepStrictReason =
   -- ^ One of the fields of the constructor fails to be deep strict.
   | LazyField !FieldKey
   -- ^ One of the fields of the constructor is lazy, ie, doesn't have a @!@.
+  | LazyNotUnlifted !(Either TH.Type TH.Name) ![DeepStrictReason]
+  -- ^ A type we expected to be unlifted so a parent type could be strict, was not unlifted.
   | LazyOther !String
   deriving (Eq, Ord, Show, TH.Lift)
 
@@ -138,6 +140,7 @@ instance Ppr.Ppr DeepStrictReason where
   ppr (FieldReason (Right name) rest) = Ppr.hang (Ppr.ppr name) 2  $ Ppr.vcat $ map Ppr.ppr rest
   ppr (LazyField (Left ix)) = Ppr.text "field" Ppr.<+> Ppr.int ix Ppr.<+> Ppr.text "is lazy"
   ppr (LazyField (Right name)) = Ppr.text "field" Ppr.<+>  Ppr.ppr name Ppr.<+> Ppr.text "is lazy"
+  ppr (LazyNotUnlifted name rest) = Ppr.hang (either Ppr.ppr Ppr.ppr name Ppr.<+> Ppr.text "isn't unlifted") 2 (Ppr.vcat (map Ppr.ppr rest))
   ppr (LazyOther txt) = Ppr.text txt
 
 giveReasonContext :: ([DeepStrictReason] -> DeepStrictReason) -> DeepStrictWithReason  -> DeepStrictWithReason
@@ -251,6 +254,30 @@ isConDeepStrict conInfo@(TH.ConstructorInfo { TH.constructorName = conName, TH.c
   fieldDeepStrict <- traverse (`isFieldDeepStrict` args) conFields
   pure $ giveReasonContext (LazyConstructor conName) $ mconcat fieldDeepStrict
 
+isDatatypeDeepUnlifted :: TH.DatatypeInfo -> [TH.Type] -> DeepStrictM DeepStrictWithReason
+isDatatypeDeepUnlifted dt args = isDatatypeDeepUnlifted' dt' args'
+  where
+    (dt', args') = substituteDatatypeInfoEnv args dt
+
+isDatatypeDeepUnlifted' :: HasCallStack => TH.DatatypeInfo -> [TH.Type] -> DeepStrictM DeepStrictWithReason
+isDatatypeDeepUnlifted' datatypeInfo args = do
+  consDeepUnlifted <- traverse (\c -> isConDeepUnlifted c (TH.datatypeVariant datatypeInfo) args) $ TH.datatypeCons datatypeInfo -- bit of a weird traverse since we want it to be a newtype, but that's fine
+  pure $ mconcat consDeepUnlifted
+
+isConDeepUnlifted :: HasCallStack => TH.ConstructorInfo -> TH.DatatypeVariant -> [TH.Type] -> DeepStrictM DeepStrictWithReason
+isConDeepUnlifted (TH.ConstructorInfo { TH.constructorName = conName, TH.constructorFields = fieldTypes }) variant args = do
+  if not (isNewtype variant)
+    then pure $ NotDeepStrict [LazyNotUnlifted (Right conName) []]
+    else do
+      fieldType <- (case fieldTypes of
+        [] -> fail "newtype had no fields"
+        (x:_) -> pure x)
+      fieldTypeRecStrict <- isTypeDeepUnlifted fieldType args
+      fieldLevity <- reifyLevityType fieldType
+      case (fieldTypeRecStrict, fieldLevity) of
+        (DeepStrict, Unlifted) -> pure DeepStrict
+        (strictness, _) -> pure $ giveReasonContext (LazyNotUnlifted (Right conName)) strictness
+
 isNewtype :: TH.DatatypeVariant -> Bool
 isNewtype TH.Newtype         = True
 isNewtype TH.NewtypeInstance = True
@@ -307,31 +334,30 @@ isTypeDeepStrict' (TH.UnboxedTupleT arity) args = isNameDeepStrict (TH.unboxedTu
 isTypeDeepStrict' (TH.UnboxedSumT arity) args  = isNameDeepStrict (TH.unboxedSumTypeName arity) args
 isTypeDeepStrict' typ _                   = prettyPanic "Unexpected type" typ
 
-isTypeDeepUnlifted :: HasCallStack => TH.Type -> [TH.Type] -> DeepStrictM Bool
-isTypeDeepUnlifted typ args = case typ of
+isTypeDeepUnlifted :: HasCallStack => TH.Type -> [TH.Type] -> DeepStrictM DeepStrictWithReason
+isTypeDeepUnlifted typ args = giveReasonContext (LazyNotUnlifted (Left typ)) <$> isTypeDeepUnlifted' typ args
+
+isTypeDeepUnlifted' :: HasCallStack => TH.Type -> [TH.Type] -> DeepStrictM DeepStrictWithReason
+isTypeDeepUnlifted' typ args = case typ of
   (TH.ConT typeName) -> isNameDeepUnlifted typeName args
-  (TH.AppT func arg) -> isTypeDeepUnlifted func (arg:args)
+  (TH.AppT func arg) -> isTypeDeepUnlifted' func (arg:args)
   (TH.UnboxedTupleT arity) -> isNameDeepUnlifted (TH.unboxedTupleTypeName arity) args
   (TH.UnboxedSumT arity) -> isNameDeepUnlifted (TH.unboxedSumTypeName arity) args
-  _ -> pure False
+  _ -> pure $ NotDeepStrict [LazyNotUnlifted (Left typ) []]
 
-isNameDeepUnlifted :: HasCallStack => TH.Name -> [TH.Type] -> DeepStrictM Bool
+isNameDeepUnlifted :: HasCallStack => TH.Name -> [TH.Type] -> DeepStrictM DeepStrictWithReason
 isNameDeepUnlifted typeName args = do
   info <- DeepStrictM $ lift $ TH.reify typeName
   case info of
-    TH.PrimTyConI _ arity unlifted ->
-      if unlifted
-        then do
-          let theArgs = take arity args
-              allM [] = pure True
-              allM (x:xs) = do
-                isDeepUnlifted <- isTypeDeepUnlifted x [] -- not sure about empty list here
-                if isDeepUnlifted
-                  then allM xs
-                  else pure False
-          allM theArgs
-        else pure False
-    _ -> pure False
+    TH.PrimTyConI _ arity unlifted | unlifted ->
+      mconcat <$> mapM (`isTypeDeepUnlifted` []) (take arity args)
+    TH.TyConI (TH.TySynD _name tyvarbndrs rhs) -> do
+      let (env, args') = prepareDatatypeInfoEnv args (map TH.tvName tyvarbndrs)
+      isTypeDeepUnlifted (TH.applySubstitution env rhs) args'
+    TH.TyConI _ -> do
+      datatypeInfo <- DeepStrictM $ lift $ TH.normalizeInfo info
+      isDatatypeDeepUnlifted datatypeInfo args
+    _ -> pure $ NotDeepStrict [LazyNotUnlifted (Right typeName) []]
 
 -- | figure out whether a newtype/data family is deep strict
 isDataFamilyDeepStrict
@@ -396,9 +422,7 @@ isNameDeepStrict typeName args = do
       fmap mconcat . for (zip strictnessReqs args) $ \case
         (Lazy, _)     -> pure DeepStrict
         (Strict, typ) -> isTypeDeepStrict typ []
-        (UnliftedStrictness, typ) -> do
-          typeIsDeepUnlifted <- isTypeDeepUnlifted typ []
-          pure $ if typeIsDeepUnlifted then DeepStrict else NotDeepStrict [LazyOther "This type needed to be Unlifted"]
+        (UnliftedStrictness, typ) -> isTypeDeepUnlifted typ []
 
 -- | Determine if a type is deep strict
 -- Invariant: The type doesn't contain any free variables, eg, @Maybe a@ will fail.
