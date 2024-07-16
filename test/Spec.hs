@@ -17,6 +17,7 @@ import Data.Proxy
 import Data.HashMap.Strict (HashMap)
 import Data.Tree (Tree)
 import GHC.Exts
+import Data.Primitive.SmallArray
 
 data StrictList a = SCons !a !(StrictList a) | SNill
 
@@ -65,6 +66,8 @@ spec = testGroup "golden tests"
     , $(testType =<< [t| Identity# (# Int#, Int# #)|])
     , $(testType =<< [t| (# Int# | Int# #)|])
     , $(testType =<< [t| (# Int# | Maybe Int #)|])
+    , $(testType =<< [t|SmallArray Int|]) -- Small array needs the param to be unlifted for it to be unlifted
+    , $(testType =<< [t|SmallArray Int#|]) -- see above
     ]
   , testGroup "regresion tests"
     [ $(testType =<< [t|Tricky|]) ]
