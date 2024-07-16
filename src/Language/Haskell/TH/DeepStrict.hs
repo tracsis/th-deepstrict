@@ -38,6 +38,7 @@ import Data.Traversable              (for)
 import GHC.Stack                     (HasCallStack)
 import Language.Haskell.TH           (Q)
 import Language.Haskell.TH.Instances ()
+import GHC.Exts                      (SmallArray#, Array#, SmallMutableArray#, MutableArray#)
 
 import qualified Data.Map                     as ML
 import qualified Data.Set                     as S
@@ -72,6 +73,14 @@ emptyContext = do
       , contextOverride = M.empty
       , contextRecursionDepth = 1000
       }
+
+defaultContextOverride :: M.Map TH.Name (Maybe [Strictness])
+defaultContextOverride = M.fromList
+  [ (''SmallArray#, Just [UnliftedStrictness])
+  , (''SmallMutableArray#, Just [UnliftedStrictness])
+  , (''MutableArray#, Just [UnliftedStrictness])
+  , (''Array#, Just [UnliftedStrictness])
+  ]
 
 -- | A type is deep strict if and only if for each constructor:
 --
@@ -401,7 +410,7 @@ isDeepStrict typ = do
 isDeepStrictWith :: Context -> TH.Type -> Q DeepStrictWithReason
 isDeepStrictWith context typ = do
   typRes <- TH.resolveTypeSynonyms typ
-  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes []) context
+  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes []) context { contextOverride = contextOverride context <> defaultContextOverride }
 
 
 -- | Assert that a type is deep strict.
