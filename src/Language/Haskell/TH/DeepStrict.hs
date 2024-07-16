@@ -144,7 +144,7 @@ data Levity = Lifted | Unlifted
 -- We use these to annotate types with deep strictness overrides.
 -- Types that have fields labelled as 'Language.Haskell.TH.DeepStrict.Strict' require those types to be deep strict.
 -- Types that have fields labelled as 'Language.Haskell.TH.DeepStrict.Lazy' will never be deep strict, but this can be helpful for nicer messages.
-data Strictness = Strict | Lazy
+data Strictness = UnliftedStrictness | Strict | Lazy
   deriving (Eq, Ord, Show)
 
 -- | A function/constructor is weak strict either iff it is strict and the argument isn't unlifted
@@ -298,6 +298,32 @@ isTypeDeepStrict' (TH.UnboxedTupleT arity) args = isNameDeepStrict (TH.unboxedTu
 isTypeDeepStrict' (TH.UnboxedSumT arity) args  = isNameDeepStrict (TH.unboxedSumTypeName arity) args
 isTypeDeepStrict' typ _                   = prettyPanic "Unexpected type" typ
 
+isTypeDeepUnlifted :: HasCallStack => TH.Type -> [TH.Type] -> DeepStrictM Bool
+isTypeDeepUnlifted typ args = case typ of
+  (TH.ConT typeName) -> isNameDeepUnlifted typeName args
+  (TH.AppT func arg) -> isTypeDeepUnlifted func (arg:args)
+  (TH.UnboxedTupleT arity) -> isNameDeepUnlifted (TH.unboxedTupleTypeName arity) args
+  (TH.UnboxedSumT arity) -> isNameDeepUnlifted (TH.unboxedSumTypeName arity) args
+  _ -> pure False
+
+isNameDeepUnlifted :: HasCallStack => TH.Name -> [TH.Type] -> DeepStrictM Bool
+isNameDeepUnlifted typeName args = do
+  info <- DeepStrictM $ lift $ TH.reify typeName
+  case info of
+    TH.PrimTyConI _ arity unlifted ->
+      if unlifted
+        then do
+          let theArgs = take arity args
+              allM [] = pure True
+              allM (x:xs) = do
+                isDeepUnlifted <- isTypeDeepUnlifted x [] -- not sure about empty list here
+                if isDeepUnlifted
+                  then allM xs
+                  else pure False
+          allM theArgs
+        else pure False
+    _ -> pure False
+
 -- | figure out whether a newtype/data family is deep strict
 isDataFamilyDeepStrict
   :: (p1 -> TH.Name -> [TH.TyVarBndr TH.BndrVis] -> p2 -> p3 -> p4 -> TH.Dec)
@@ -361,6 +387,9 @@ isNameDeepStrict typeName args = do
       fmap mconcat . for (zip strictnessReqs args) $ \case
         (Lazy, _)     -> pure DeepStrict
         (Strict, typ) -> isTypeDeepStrict typ []
+        (UnliftedStrictness, typ) -> do
+          typeIsDeepUnlifted <- isTypeDeepUnlifted typ []
+          pure $ if typeIsDeepUnlifted then DeepStrict else NotDeepStrict [LazyOther "This type needed to be Unlifted"]
 
 -- | Determine if a type is deep strict
 -- Invariant: The type doesn't contain any free variables, eg, @Maybe a@ will fail.
