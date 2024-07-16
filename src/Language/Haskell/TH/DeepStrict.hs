@@ -166,7 +166,7 @@ data Levity = Lifted | Unlifted
 data ExpectedStrictness
   = ExpectUnlifted -- ^ type param has to be unlifted for type to be deepstrict (Array#, SmallArray#, etc)
   | ExpectStrict -- ^ type param has to be deep strict for type to be strict (strict containers)
-  | ExpectLazy -- ^ type always treats this parameter as lazy, and expects that
+  | ExpectAnything -- ^ type is deep strict irrespective of the value of this type parameter, eg, if it is unused
   deriving (Eq, Ord, Show)
 
 -- | A function/constructor is weak strict either iff it is strict and the argument isn't unlifted
@@ -381,7 +381,7 @@ isNameDeepStrict typeName args = do
     Just Nothing -> pure $ NotDeepStrict [LazyOther "This type is marked as lazy"]
     Just (Just strictnessReqs) ->
       fmap mconcat . for (zip strictnessReqs args) $ \case
-        (ExpectLazy, _)     -> pure DeepStrict
+        (ExpectAnything, _)     -> pure DeepStrict
         (ExpectStrict, typ) -> isTypeDeepStrict typ []
         (ExpectUnlifted, typ) -> do
           levity <- reifyLevityType typ
