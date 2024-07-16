@@ -58,7 +58,12 @@ newtype DeepStrictM a = DeepStrictM { runDeepStrictM :: ReaderT Context Q a }
 data Context = Context
   { contextSpine          :: !(S.Set TH.Type) -- ^ The types we are recursively checking. By the inductive hypothesis, we assume they are DeepStrict.
   , contextCache          :: !(IORef (M.Map TH.Type DeepStrictWithReason))
-  , contextOverride       :: !(M.Map TH.Name (Maybe [ExpectedStrictness])) -- ^ Maps names of types to whether they can be deep strict and if they can which arguments need to be strict
+  , contextOverride       :: !(M.Map TH.Name (Maybe [ExpectedStrictness]))
+  -- ^ Maps names of types to whether they can be deep strict and if they can which arguments need to be strict. 
+  --
+  -- In addition to user-provided types, a handful of internal GHC types are added as well.
+  -- All of SmallArray#, SmallMutableArray#, MutableArray#, and Array# are added
+  -- and are `Just [ExpectUnlifted]`.
   , contextRecursionDepth :: !Int -- ^ A recursion depth to avoid infinite loops.
   }
 
@@ -74,8 +79,10 @@ emptyContext = do
       , contextRecursionDepth = 1000
       }
 
-defaultContextOverride :: M.Map TH.Name (Maybe [ExpectedStrictness])
-defaultContextOverride = M.fromList
+-- | Structures that are present in base that need special treatment (they don't
+-- have constructors we can inspect).
+baseOverride :: M.Map TH.Name (Maybe [ExpectedStrictness])
+baseOverride = M.fromList
   [ (''SmallArray#, Just [ExpectUnlifted])
   , (''SmallMutableArray#, Just [ExpectUnlifted])
   , (''MutableArray#, Just [ExpectUnlifted])
@@ -392,7 +399,7 @@ isDeepStrict typ = do
 isDeepStrictWith :: Context -> TH.Type -> Q DeepStrictWithReason
 isDeepStrictWith context typ = do
   typRes <- TH.resolveTypeSynonyms typ
-  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes []) context { contextOverride = contextOverride context <> defaultContextOverride }
+  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes []) context { contextOverride = contextOverride context <> baseOverride }
 
 
 -- | Assert that a type is deep strict.
