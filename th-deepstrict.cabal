@@ -55,6 +55,7 @@ test-suite test
     , bytestring
     , containers
     , directory
+    , primitive
     , tasty
     , tasty-golden
     , template-haskell
