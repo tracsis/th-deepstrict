@@ -246,24 +246,24 @@ isDatatypeDeepStrict dt@(TH.DatatypeInfo {TH.datatypeInstTypes = instTypes}) =
         where
         inField = giveReasonContext (FieldReason fieldName)
 
-      reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
-      reifyLevityType = \case
-        (TH.ConT name) -> classifyKindLevity <$> TH.qReifyType name
-        (TH.AppT x _)  -> reifyLevityType x
-        (TH.ListT{})   -> pure Lifted
-        (TH.TupleT{})  -> pure Lifted
-        (TH.ArrowT{})  -> pure Lifted
-        (TH.UnboxedTupleT{}) -> pure Unlifted
-        (TH.UnboxedSumT{}) -> pure Unlifted
-        typ -> prettyPanic "unexpected type" typ
-        where
-        -- | Figure out the levity of a type from its kind.
-        --   If it has type arguments the kind will have arrows, we want to know the final return type.
-        --   Eg, for (x -> (y -> z)), we care about z
-        classifyKindLevity :: TH.Kind -> Levity
-        classifyKindLevity (TH.AppT _ x) = classifyKindLevity x
-        classifyKindLevity TH.StarT      = Lifted
-        classifyKindLevity _             = Unlifted
+reifyLevityType :: HasCallStack => TH.Type -> DeepStrictM Levity
+reifyLevityType = \case
+  (TH.ConT name) -> classifyKindLevity <$> TH.qReifyType name
+  (TH.AppT x _)  -> reifyLevityType x
+  (TH.ListT{})   -> pure Lifted
+  (TH.TupleT{})  -> pure Lifted
+  (TH.ArrowT{})  -> pure Lifted
+  (TH.UnboxedTupleT{}) -> pure Unlifted
+  (TH.UnboxedSumT{}) -> pure Unlifted
+  typ -> prettyPanic "unexpected type" typ
+  where
+  -- | Figure out the levity of a type from its kind.
+  --   If it has type arguments the kind will have arrows, we want to know the final return type.
+  --   Eg, for (x -> (y -> z)), we care about z
+  classifyKindLevity :: TH.Kind -> Levity
+  classifyKindLevity (TH.AppT _ x) = classifyKindLevity x
+  classifyKindLevity TH.StarT      = Lifted
+  classifyKindLevity _             = Unlifted
 
 getCachedDeepStrict :: HasCallStack => TH.Type -> DeepStrictM (Maybe DeepStrictWithReason)
 getCachedDeepStrict typ = do
