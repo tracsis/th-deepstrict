@@ -1,0 +1,5 @@
+NotDeepStrict
+Data.Primitive.SmallArray.SmallArray GHC.Types.Int
+  con Data.Primitive.SmallArray.SmallArray
+    field 0
+      GHC.Prim.SmallArray# GHC.Types.Int GHC.Types.Int isn't unlifted

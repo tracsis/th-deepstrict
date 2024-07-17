@@ -21,7 +21,7 @@ module Language.Haskell.TH.DeepStrict
   , assertDeepStrictWith
   -- * Context
   , Context(..)
-  , Strictness(..)
+  , ExpectedStrictness(..)
   , emptyContext
   , FieldKey
   ) where
@@ -38,6 +38,7 @@ import Data.Traversable              (for)
 import GHC.Stack                     (HasCallStack)
 import Language.Haskell.TH           (Q)
 import Language.Haskell.TH.Instances ()
+import GHC.Exts                      (SmallArray#, Array#, SmallMutableArray#, MutableArray#)
 
 import qualified Data.Map                     as ML
 import qualified Data.Set                     as S
@@ -57,7 +58,12 @@ newtype DeepStrictM a = DeepStrictM { runDeepStrictM :: ReaderT Context Q a }
 data Context = Context
   { contextSpine          :: !(S.Set TH.Type) -- ^ The types we are recursively checking. By the inductive hypothesis, we assume they are DeepStrict.
   , contextCache          :: !(IORef (M.Map TH.Type DeepStrictWithReason))
-  , contextOverride       :: !(M.Map TH.Name (Maybe [Strictness])) -- ^ Maps names of types to whether they can be deep strict and if they can which arguments need to be strict
+  , contextOverride       :: !(M.Map TH.Name (Maybe [ExpectedStrictness]))
+  -- ^ Maps names of types to whether they can be deep strict and if they can which arguments need to be strict. 
+  --
+  -- In addition to user-provided types, a handful of internal GHC types are added as well.
+  -- All of SmallArray#, SmallMutableArray#, MutableArray#, and Array# are added
+  -- and are `Just [ExpectUnlifted]`.
   , contextRecursionDepth :: !Int -- ^ A recursion depth to avoid infinite loops.
   }
 
@@ -72,6 +78,16 @@ emptyContext = do
       , contextOverride = M.empty
       , contextRecursionDepth = 1000
       }
+
+-- | Structures that are present in base that need special treatment (they don't
+-- have constructors we can inspect).
+baseOverride :: M.Map TH.Name (Maybe [ExpectedStrictness])
+baseOverride = M.fromList
+  [ (''SmallArray#, Just [ExpectUnlifted])
+  , (''SmallMutableArray#, Just [ExpectUnlifted])
+  , (''MutableArray#, Just [ExpectUnlifted])
+  , (''Array#, Just [ExpectUnlifted])
+  ]
 
 -- | A type is deep strict if and only if for each constructor:
 --
@@ -115,6 +131,8 @@ data DeepStrictReason =
   -- ^ One of the fields of the constructor fails to be deep strict.
   | LazyField !FieldKey
   -- ^ One of the fields of the constructor is lazy, ie, doesn't have a @!@.
+  | LazyNotUnlifted !(Either TH.Type TH.Name) ![DeepStrictReason]
+  -- ^ A type we expected to be unlifted so a parent type could be strict, was not unlifted.
   | LazyOther !String
   deriving (Eq, Ord, Show, TH.Lift)
 
@@ -129,6 +147,7 @@ instance Ppr.Ppr DeepStrictReason where
   ppr (FieldReason (Right name) rest) = Ppr.hang (Ppr.ppr name) 2  $ Ppr.vcat $ map Ppr.ppr rest
   ppr (LazyField (Left ix)) = Ppr.text "field" Ppr.<+> Ppr.int ix Ppr.<+> Ppr.text "is lazy"
   ppr (LazyField (Right name)) = Ppr.text "field" Ppr.<+>  Ppr.ppr name Ppr.<+> Ppr.text "is lazy"
+  ppr (LazyNotUnlifted name rest) = Ppr.hang (either Ppr.ppr Ppr.ppr name Ppr.<+> Ppr.text "isn't unlifted") 2 (Ppr.vcat (map Ppr.ppr rest))
   ppr (LazyOther txt) = Ppr.text txt
 
 giveReasonContext :: ([DeepStrictReason] -> DeepStrictReason) -> DeepStrictWithReason  -> DeepStrictWithReason
@@ -144,7 +163,10 @@ data Levity = Lifted | Unlifted
 -- We use these to annotate types with deep strictness overrides.
 -- Types that have fields labelled as 'Language.Haskell.TH.DeepStrict.Strict' require those types to be deep strict.
 -- Types that have fields labelled as 'Language.Haskell.TH.DeepStrict.Lazy' will never be deep strict, but this can be helpful for nicer messages.
-data Strictness = Strict | Lazy
+data ExpectedStrictness
+  = ExpectUnlifted -- ^ type param has to be unlifted for type to be deepstrict (Array#, SmallArray#, etc)
+  | ExpectStrict -- ^ type param has to be deep strict for type to be strict (strict containers)
+  | ExpectAnything -- ^ type is deep strict irrespective of the value of this type parameter, eg, if it is unused
   deriving (Eq, Ord, Show)
 
 -- | A function/constructor is weak strict either iff it is strict and the argument isn't unlifted
@@ -359,8 +381,13 @@ isNameDeepStrict typeName args = do
     Just Nothing -> pure $ NotDeepStrict [LazyOther "This type is marked as lazy"]
     Just (Just strictnessReqs) ->
       fmap mconcat . for (zip strictnessReqs args) $ \case
-        (Lazy, _)     -> pure DeepStrict
-        (Strict, typ) -> isTypeDeepStrict typ []
+        (ExpectAnything, _)     -> pure DeepStrict
+        (ExpectStrict, typ) -> isTypeDeepStrict typ []
+        (ExpectUnlifted, typ) -> do
+          levity <- reifyLevityType typ
+          case levity of
+            Lifted -> pure $ NotDeepStrict [LazyNotUnlifted (Left typ) []]
+            Unlifted -> isTypeDeepStrict typ []
 
 -- | Determine if a type is deep strict
 -- Invariant: The type doesn't contain any free variables, eg, @Maybe a@ will fail.
@@ -372,7 +399,7 @@ isDeepStrict typ = do
 isDeepStrictWith :: Context -> TH.Type -> Q DeepStrictWithReason
 isDeepStrictWith context typ = do
   typRes <- TH.resolveTypeSynonyms typ
-  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes []) context
+  runReaderT (runDeepStrictM $ isTypeDeepStrict typRes []) context { contextOverride = contextOverride context <> baseOverride }
 
 
 -- | Assert that a type is deep strict.

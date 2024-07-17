@@ -10,7 +10,7 @@ description:
 
 author:          Teo Camarasu <teofilcamarasu@gmail.com>
 maintainer:      Teo Camarasu <teofilcamarasu@gmail.com>
-version:         0.1.1.0
+version:         0.2.0.0
 copyright:       Tracsis plc
 license:         BSD-3-Clause
 license-file:    LICENSE
@@ -55,6 +55,7 @@ test-suite test
     , bytestring
     , containers
     , directory
+    , primitive
     , tasty
     , tasty-golden
     , template-haskell

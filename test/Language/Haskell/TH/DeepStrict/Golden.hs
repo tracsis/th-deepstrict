@@ -49,9 +49,9 @@ testType typ = do
  let context =
        eC {contextOverride = M.fromList
         [ (''ByteString, Just [])
-        , (''M.Map, Just [Strict, Strict])
-        , (''IM.IntMap, Just [Strict])
-        , (''HashSet, Just [Strict]) -- is a lazy hashmap underneath, but the keys are strict
-        , (''HashMap, Just [Strict, Strict]) -- is strict already, but let's reduce the output size
+        , (''M.Map, Just [ExpectStrict, ExpectStrict])
+        , (''IM.IntMap, Just [ExpectStrict])
+        , (''HashSet, Just [ExpectStrict]) -- is a lazy hashmap underneath, but the keys are strict
+        , (''HashMap, Just [ExpectStrict, ExpectStrict]) -- is strict already, but let's reduce the output size
         ]}
  [| doGolden $(TH.lift typ) $(TH.lift . Ppr.pprint =<< isDeepStrictWith context typ ) |]
