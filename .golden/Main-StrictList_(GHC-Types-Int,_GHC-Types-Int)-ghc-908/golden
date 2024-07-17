@@ -1,0 +1,8 @@
+NotDeepStrict
+Main.StrictList (GHC.Types.Int, GHC.Types.Int)
+  con Main.SCons
+    field 0
+      (GHC.Types.Int, GHC.Types.Int)
+        con GHC.Tuple.Prim.(,)
+          field 0 is lazy
+          field 1 is lazy
