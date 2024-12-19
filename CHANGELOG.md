@@ -1,5 +1,9 @@
 # Revision history for `th-deepstrict`
 
+## Unreleased
+
+* Support GHC-9.12
+
 ## 0.2.0.0 -- 2024/07/16
 
 * ExpectUnlifted is an option when specifying the parameters for a data type, meaning
