@@ -56,6 +56,7 @@ spec = testGroup "golden tests"
     , $(testType =<< [t|StrictList ()|])
     , $(testType =<< [t|Tree Bool|])
     , $(testType =<< [t| HashMap () ()|])
+    , $(testType =<< [t|StrictList (Int, Int)|])
     ]
   , testGroup "unlifted"
     [ $(testType =<< [t|Int#|])
