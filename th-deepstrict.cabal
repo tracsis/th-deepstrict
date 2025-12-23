@@ -24,10 +24,11 @@ extra-doc-files:
 tested-with: 
   GHC ==9.2.8 
    || ==9.4.8 
-   || ==9.6.4 
+   || ==9.6.7
    || ==9.8.4
-   || ==9.10.2
-   || ==9.12.1
+   || ==9.10.3
+   || ==9.12.2
+   || ==9.14.1
 
 library
   default-language: Haskell2010
@@ -36,10 +37,10 @@ library
   exposed-modules:  Language.Haskell.TH.DeepStrict
   ghc-options:      -Wall -Wunused-packages
   build-depends:
-    , base              >=4.16.0  && <4.22
+    , base              >=4.16.0  && <4.23
     , containers        >=0.6.0   && <0.9
     , mtl               >=2.2     && <2.4
-    , template-haskell  >=2.18.0  && <2.24
+    , template-haskell  >=2.18.0  && <2.25
     , th-abstraction    >=0.7.0   && <0.8
     , th-orphans        >=0.13.14 && <0.14
 
